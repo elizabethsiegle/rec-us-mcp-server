@@ -1,50 +1,89 @@
-# Building a Remote MCP Server on Cloudflare (Without Auth)
+# SF Tennis Court Booking via Cloudflare MCP Server
 
-This example allows you to deploy a remote MCP server that doesn't require authentication on Cloudflare Workers. 
+Automate tennis court bookings on San Francisco Recreation websites using a Cloudflare MCP (Model Context Protocol) server with browser automation. Never miss your favorite court time again!
 
-## Get started: 
+## What This Does
+
+This MCP server provides **3 tennis booking tools**:
+
+- **Check Court Availability** - See available time slots for any court/date
+- **Book Court & Request SMS** - Automate booking flow up to SMS verification  
+- **Complete Booking with SMS** - Finish booking by entering your SMS code
+
+## Quick Deploy
 
 [![Deploy to Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/cloudflare/ai/tree/main/demos/remote-mcp-authless)
 
-This will deploy your MCP server to a URL like: `remote-mcp-server-authless.<your-account>.workers.dev/sse`
+This will deploy your tennis booking MCP server to: `tennis-booking.<your-account>.workers.dev/sse`
 
-Alternatively, you can use the command line below to get the remote MCP Server created on your local machine:
+Alternatively, clone and deploy locally:
 ```bash
-npm create cloudflare@latest -- my-mcp-server --template=cloudflare/ai/demos/remote-mcp-authless
+npm create cloudflare@latest -- tennis-booking-mcp --template=cloudflare/ai/demos/remote-mcp-authless
 ```
 
-## Customizing your MCP Server
+## How the tennis booking works
 
-To add your own [tools](https://developers.cloudflare.com/agents/model-context-protocol/tools/) to the MCP server, define each tool inside the `init()` method of `src/index.ts` using `this.server.tool(...)`. 
+1. Check what's available:
 
-## Connect to Cloudflare AI Playground
+```javascript
+check_tennis_courts({
+  court: "Alice Marble", 
+  date: "2025-07-29", 
+  time: "12:00 PM"
+})
+```
 
-You can connect to your MCP server from the Cloudflare AI Playground, which is a remote MCP client:
+2. Start booking process (stops at SMS step)
 
-1. Go to https://playground.ai.cloudflare.com/
-2. Enter your deployed MCP server URL (`remote-mcp-server-authless.<your-account>.workers.dev/sse`)
-3. You can now use your MCP tools directly from the playground!
+```javascript
+book_and_request_sms({
+  court: "Alice Marble",
+  time: "12:00 PM", 
+  date: "2025-07-29"
+})
+```
 
-## Connect Claude Desktop to your MCP server
+3. Manual SMS + Automated Completion (User gets verification code from rec.us, types it in to MCP server message, this tool then runs)
+```javascript
+enter_sms_code_and_complete({code: "123456"})
+```
 
-You can also connect to your remote MCP server from local MCP clients, by using the [mcp-remote proxy](https://www.npmjs.com/package/mcp-remote). 
+## Setup Requirements
+You need secrets for your Cloudflare Worker/MCP server:
+```bash
+REC_EMAIL=your-sf-rec-email@example.com
+REC_PASSWORD=your-sf-rec-password
+```
+Your wrangler.jsonc should have: 
+```jsonc
+"ai": {
+		"binding": "AI"
+	},
+	"browser": {
+		"binding": "MYBROWSER"
+	},
+```
 
-To connect to your MCP server from Claude Desktop, follow [Anthropic's Quickstart](https://modelcontextprotocol.io/quickstart/user) and within Claude Desktop go to Settings > Developer > Edit Config.
+## Connect to MCP Clients
+1. Cloudflare LLM Playground
 
-Update with this configuration:
+Go to https://playground.ai.cloudflare.com/
+Enter your MCP server URL: `tennis-booking.<your-account>.workers.dev/sse`
+Start booking courts with natural language!
 
+2. Claude Desktop
+Install the [mcp-remote proxy](https://www.npmjs.com/package/mcp-remote) and update Claude Desktop's config:
 ```json
 {
   "mcpServers": {
-    "calculator": {
+    "tennis-booking": {
       "command": "npx",
       "args": [
-        "mcp-remote",
-        "http://localhost:8787/sse"  // or remote-mcp-server-authless.your-account.workers.dev/sse
+        "mcp-remote", 
+        "https://tennis-booking.<your-account>.workers.dev/sse"
       ]
     }
   }
 }
 ```
-
-Restart Claude and you should see the tools become available. 
+Now you can chat with Claude: "Book Alice Marble court for tomorrow at 2 PM" and it will handle the entire process!
