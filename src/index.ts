@@ -4,45 +4,128 @@ import { z } from "zod";
 import { launch, type BrowserWorker } from "@cloudflare/playwright";
 import { env } from 'cloudflare:workers'
 
-
 interface Env {
-	AI: any;
-	MYBROWSER: BrowserWorker;
-	MCP: DurableObjectNamespace;
-	BOOKINGS: KVNamespace;
-	REC_EMAIL: string;
-	REC_PASSWORD: string;
+	AI: any;                         
+	MYBROWSER: BrowserWorker;         
+	MCP: DurableObjectNamespace;      
+	KV: KVNamespace;           
+	REC_EMAIL: string;                
+	REC_PASSWORD: string;             
+	
+	// Stytch Consumer authentication secrets
+	STYTCH_PROJECT_ID: string;
+	STYTCH_SECRET: string;
+	AUTHORIZED_USER_EMAILS: string;
 }
 
-interface BookingData {
-	day: string;
-	court: string;
-	time: string;
+// ===== AUTHENTICATION UTILITIES =====
+interface AuthenticatedUser {
+	id: string;
+	email: string;
+	verified: boolean;
 }
 
+// Helper function to access environment variables with proper typing
 function getEnv<Env>() {
-	return env as Env
+	return env as Env;
+}
+
+// Helper function to store MCP session
+async function storeMCPSession(env: Env, userId: string, email: string): Promise<void> {
+	const sessionKey = `mcp_session:${userId}`;
+	const sessionData = JSON.stringify({
+		id: userId,
+		email: email,
+		verified: true,
+		timestamp: Date.now()
+	});
+	
+	await env.KV.put(sessionKey, sessionData, {
+		expirationTtl: 3600 // 1 hour in seconds
+	});
 }
 
 export class MyMCP extends McpAgent {
 	server: McpServer;
 
-	private browser: any = null;
-	private lastBrowserInit: number = 0;
-	private readonly BROWSER_TIMEOUT = 5 * 60 * 1000; // 5 minutes
-	private initPromise: Promise<void> | null = null;
-	private isInitializing = false;
+	// AUTHENTICATION URL
+	private readonly AUTH_URL = "https://mcp-tennis-auth.pages.dev/login";
+
+	// BROWSER MANAGEMENT PROPERTIES
+	private browser: any = null;                          
+	private lastBrowserInit: number = 0;                  
+	private readonly BROWSER_TIMEOUT = 5 * 60 * 1000;    
+	private initPromise: Promise<void> | null = null;     
+	private isInitializing = false;                       
 
 	constructor(state: any) {
+		// Initialize MCP server with metadata
 		const server = new McpServer({
-			name: "Tennis Court Booking",
-			version: "3.0.0",
+			name: "Tennis Court Booking (Consumer Auth)",
+			version: "5.0.0",
 		});
 		super(state, { server });
 		this.server = server;
-		this.initializeTools();
+		this.initializeTools(); // Register all available tools
 	}
 
+	// ===== AUTHENTICATION ERROR MESSAGE HELPER =====
+	private getAuthRequiredMessage(currentEnv: Env): string {
+		return `🔐 AUTHENTICATION REQUIRED
+
+This booking operation requires authentication.
+
+🔗 **AUTHENTICATE NOW:**
+Visit: ${this.AUTH_URL}
+
+Steps:
+1. Click or visit the authentication URL above
+2. Sign in with Google using an authorized email
+3. Return here and try the booking again
+
+Authorized users: ${currentEnv.AUTHORIZED_USER_EMAILS || 'No authorized users configured'}
+
+The authentication page will handle the OAuth flow and register your session automatically.`;
+	}
+
+	// ===== SIMPLIFIED AUTHENTICATION MIDDLEWARE =====
+	private async authenticateUser(extra?: any): Promise<AuthenticatedUser | null> {
+		try {
+			// For MCP clients, check if we have a stored session
+			const mcpSession = await this.getMCPSession();
+			if (mcpSession) {
+				return mcpSession;
+			}
+
+			console.log('🔐 No valid authentication found');
+			return null;
+		} catch (error) {
+			console.error('Authentication error:', error);
+			return null;
+		}
+	}
+
+	// Get MCP session
+	private async getMCPSession(): Promise<AuthenticatedUser | null> {
+		const currentEnv = getEnv() as Env;
+		
+		// Look for any recent authenticated session
+		const keys = await currentEnv.KV.list({ prefix: 'mcp_session:' });
+		for (const key of keys.keys) {
+			const session = await currentEnv.KV.get(key.name);
+			if (session) {
+				const sessionData = JSON.parse(session);
+				// Check if session is less than 1 hour old
+				if (Date.now() - sessionData.timestamp < 3600000) {
+					return sessionData;
+				}
+			}
+		}
+		
+		return null;
+	}
+
+	// ===== BROWSER INITIALIZATION & MANAGEMENT =====
 	async init() {
 		if (this.isInitializing) {
 			await this.initPromise;
@@ -69,14 +152,13 @@ export class MyMCP extends McpAgent {
 					throw new Error('MYBROWSER binding not found in environment. Check wrangler.toml has [[browser]] binding = "MYBROWSER"');
 				}
 
-				// Use the Cloudflare Playwright launch directly
 				this.browser = await launch((env as any).MYBROWSER);
 				this.lastBrowserInit = now;
 				console.log('Browser launched successfully');
 			} catch (error: unknown) {
 				console.error('Browser initialization failed:', error);
 				this.browser = null;
-				throw error; // Re-throw so caller knows it failed
+				throw error;
 			} finally {
 				this.isInitializing = false;
 				this.initPromise = null;
@@ -98,6 +180,7 @@ export class MyMCP extends McpAgent {
 		}
 	}
 
+	// ===== UTILITY FUNCTIONS =====
 	private log(str: string, email: string = 'system') {
 		const date = new Date();
 		console.log(`${email}:${date.getMonth() + 1}/${date.getDate()},${date.getHours()}:${date.getMinutes()}:${date.getSeconds()} - ${str}`);
@@ -132,17 +215,19 @@ export class MyMCP extends McpAgent {
 	}
 
 	private async getBookingStatus(date: string): Promise<string | null> {
-		this.log('hello ' + await (env as any).TENNIS_BOOKINGS?.get(`booking:${date}`));
+		this.log('hello ' + await (env as any).KV?.get(`booking:${date}`));
 		try {
-			return await (env as any).TENNIS_BOOKINGS?.get(`booking:${date}`);
+			return await (env as any).KV?.get(`booking:${date}`);
 		} catch (error) {
 			console.error('Error getting booking status:', error);
 			return null;
 		}
 	}
 
+	// ===== MCP TOOL DEFINITIONS =====
 	private initializeTools() {
-		// Check tennis court availability
+		
+		// ===== TOOL 1: CHECK TENNIS COURT AVAILABILITY (PUBLIC - NO AUTH) =====
 		this.server.tool(
 			"check_tennis_courts",
 			{
@@ -155,7 +240,7 @@ export class MyMCP extends McpAgent {
 				
 				try {
 					console.log('Starting check_tennis_courts...');
-					await this.init();
+					await this.init(); // Ensure browser is ready
 					
 					if (!this.browser) {
 						return {
@@ -177,31 +262,36 @@ export class MyMCP extends McpAgent {
 					let availability = null;
 		
 					try {
-						// Navigate to the requested court
+						// Navigate to the specific court page
 						await page.getByText(targetCourt).click();
 						await page.waitForSelector('text=Court Reservations', { timeout: 5000 });
 		
-						// Navigate to date
+						// Handle date navigation
 						const targetDate = new Date(correctedDate);
 						const today = new Date();
 						today.setFullYear(2025);
 						const nextMonth = targetDate.getMonth() !== today.getMonth();
 		
+						// Open date picker
 						await page.locator('input').click();
+						
+						// Navigate to next month if needed
 						if (nextMonth) {
 							await page.getByRole('button', { name: 'right' }).click();
 						}
 		
+						// Select specific day (with zero padding for single digits)
 						const day = targetDate.getDate();
 						await page.locator(`.react-datepicker__day--0${day < 10 ? '0' : ''}${day}:not(.react-datepicker__day--outside-month)`).first().click();
 		
-						// Wait for times to load
+						// Wait for available times to load
 						await page.waitForSelector('text=/(\\d:)|(No free)/', { timeout: 5000 });
 		
-						// Extract available times
+						// Extract available time slots from the page
 						const times = await page.getByText('Tennis').first().evaluate((el: HTMLElement) => (el.parentElement as HTMLElement).innerText);
 						const availableTimes = times.split('\n').filter((slot: string) => slot.includes(':'));
 		
+						// Compile availability data
 						availability = {
 							court: targetCourt,
 							date: correctedDate,
@@ -221,9 +311,10 @@ export class MyMCP extends McpAgent {
 						};
 					}
 		
-					await page.close();
+					await page.close(); // Clean up the page
 		
-					// Generate natural language response using Cloudflare AI
+					// ===== AI RESPONSE GENERATION =====
+					// Use Cloudflare AI to generate a natural language response
 					let responseText;
 					try {
 						const messages = [
@@ -252,7 +343,7 @@ export class MyMCP extends McpAgent {
 		
 					} catch (aiError) {
 						console.error('AI response generation failed:', aiError);
-						// Fallback to a simple text response
+						// Fallback to manual response generation
 						if (availability.error) {
 							responseText = `Sorry, I couldn't check availability for ${targetCourt} on ${correctedDate}. Error: ${availability.error}`;
 						} else if (availability.totalSlots === 0) {
@@ -281,131 +372,132 @@ export class MyMCP extends McpAgent {
 			}
 		);
 
-// CORRECT TENNIS BOOKING FLOW FOR SMS
-// Tool 1: Book and request SMS (stops at verification step)
-// Tool 2: Enter SMS code you receive on your phone
-
-this.server.tool(
-	"book_and_request_sms",
-	{
-		court: z.string().describe("Court name"),
-		time: z.string().describe("Time slot"),
-		date: z.string().describe("Date in YYYY-MM-DD format")
-	},
-	async ({ court, time, date }) => {
-		console.log('Starting booking and requesting SMS...');
-		
-		if (!this.browser) {
-			await this.init();
-		}
-		
-		const recEmail = (env as any).REC_EMAIL;
-		const recPassword = (env as any).REC_PASSWORD;
-		
-		let page;
-		try {
-			page = await this.browser.newPage();
-			// More reasonable timeouts
-			page.setDefaultTimeout(12000);
-			
-			console.log('1. Connecting...');
-			await page.goto("https://www.rec.us/sfrecpark", { 
-				timeout: 20000,
-				waitUntil: 'domcontentloaded'
-			});
-			await page.waitForTimeout(2000);
-			
-			console.log('2. Logging in...');
-			await page.waitForSelector('text=Log In', { timeout: 10000 });
-			await page.getByText('Log In').click();
-			await page.waitForSelector('input[id="email"]', { timeout: 8000 });
-			await page.fill('input[id="email"]', recEmail);
-			await page.fill('input[id="password"]', recPassword);
-			await page.getByText('log in & continue').click();
-			await page.waitForTimeout(3000); // More time for login
-			
-			console.log('3. Going to court...');
-			await page.waitForSelector(`text=${court}`, { timeout: 10000 });
-			await page.getByText(court).click();
-			await page.waitForTimeout(2000); // More time for court page
-			
-			console.log('4. Selecting date...');
-			const bookDate = new Date(date);
-			const today = new Date();
-			today.setFullYear(2025);
-			const targetDay = bookDate.getDate();
-			const nextMonth = bookDate.getMonth() !== today.getMonth();
-
-			// More robust date picker handling
-			console.log('Clicking date input...');
-			await page.locator('input').click();
-			
-			// Wait for date picker to open
-			await page.waitForSelector('.react-datepicker', { timeout: 5000 });
-			await page.waitForTimeout(1000); // Let date picker settle
-			
-			if (nextMonth) {
-				console.log('Going to next month...');
-				await page.getByRole('button', { name: 'right' }).click();
-				await page.waitForTimeout(500);
-			}
-			
-			console.log(`Selecting day ${targetDay}...`);
-			const daySelector = `.react-datepicker__day--0${targetDay < 10 ? '0' : ''}${targetDay}:not(.react-datepicker__day--outside-month)`;
-			await page.locator(daySelector).first().click();
-			await page.waitForTimeout(1500); // Wait for date selection to complete
-			
-			console.log('5. Checking time availability...');
-			await page.waitForSelector('text=/(\\d:)|(No free)/', { timeout: 8000 });
-			const times = await page.getByText('Tennis').first().evaluate((el: HTMLElement) => (el.parentElement as HTMLElement).innerText);
-			
-			// Normalize time format (handle "3pm" vs "3:00 PM")
-			let normalizedTime = time;
-			if (time.toLowerCase().includes('pm') || time.toLowerCase().includes('am')) {
-				if (!time.includes(':')) {
-					// Convert "3pm" to "3:00 PM"
-					normalizedTime = time.replace(/(\d+)(pm|am)/i, '$1:00 $2').toUpperCase();
+		// ===== TOOL 2: BOOK COURT AND REQUEST SMS (PROTECTED - AUTH REQUIRED) =====
+		this.server.tool(
+			"book_and_request_sms",
+			{
+				court: z.string().describe("Court name"),
+				time: z.string().describe("Time slot"),
+				date: z.string().describe("Date in YYYY-MM-DD format")
+			},
+			async ({ court, time, date }, extra) => {
+				// 🔒 AUTH CHECK
+				const user = await this.authenticateUser(extra);
+				if (!user) {
+					const currentEnv = getEnv() as Env;
+					return {
+						content: [{
+							type: "text",
+							text: this.getAuthRequiredMessage(currentEnv)
+						}]
+					};
 				}
-			}
-			
-			console.log(`Looking for time: ${normalizedTime} in available times: ${times.replace(/\n/g, ', ')}`);
-			
-			if (!times.includes(normalizedTime)) {
-				throw new Error(`${normalizedTime} not available. Available: ${times.replace(/\n/g, ', ')}`);
-			}
-			
-			console.log('6. Booking time...');
-			await page.getByText(normalizedTime).click();
-			
-			console.log('7. Setting duration...');
-			await page.locator(`xpath=//label[text()='Duration']/following-sibling::button`).click();
-			await page.waitForSelector('text=2 hours', { timeout: 5000 });
-			// Just pick first available to save time
-			await page.locator('div[role="option"]:not([aria-disabled="true"])').first().click();
-			
-			console.log('8. Selecting participant...');
-			// EXACT GitHub pattern
-			await page.getByText('Select participant').click();
-			await page.getByText('Account Owner').click();
-			
-			console.log('9. Requesting SMS...');
-			// EXACT GitHub pattern - click book
-			await page.locator('button.max-w-max').click();
-			await page.getByText('Send Code').click();
-			
-			// Wait a bit for SMS to be sent (GitHub has 2 second wait)
-			await page.waitForTimeout(2000);
-			
-			// Verify we reached SMS step
-			await page.waitForSelector('input[id="totp"]', { timeout: 8000 });
-			console.log('✅ SMS verification step reached!');
-			
-			// Keep page open for SMS entry
-			return {
-				content: [{
-					type: "text",
-					text: `📱 SMS CODE REQUESTED! 
 
+				console.log(`✅ Authenticated user ${user.email} is booking court...`);
+				
+				console.log('Starting booking and requesting SMS...');
+				
+				if (!this.browser) {
+					await this.init();
+				}
+				
+				const recEmail = (env as any).REC_EMAIL;
+				const recPassword = (env as any).REC_PASSWORD;
+				
+				let page;
+				try {
+					page = await this.browser.newPage();
+					page.setDefaultTimeout(12000);
+					
+					console.log('1. Connecting...');
+					await page.goto("https://www.rec.us/sfrecpark", { 
+						timeout: 20000,
+						waitUntil: 'domcontentloaded'
+					});
+					await page.waitForTimeout(2000);
+					
+					console.log('2. Logging in...');
+					await page.waitForSelector('text=Log In', { timeout: 10000 });
+					await page.getByText('Log In').click();
+					await page.waitForSelector('input[id="email"]', { timeout: 8000 });
+					await page.fill('input[id="email"]', recEmail);
+					await page.fill('input[id="password"]', recPassword);
+					await page.getByText('log in & continue').click();
+					await page.waitForTimeout(3000);
+					
+					console.log('3. Going to court...');
+					await page.waitForSelector(`text=${court}`, { timeout: 10000 });
+					await page.getByText(court).click();
+					await page.waitForTimeout(2000);
+					
+					console.log('4. Selecting date...');
+					const bookDate = new Date(date);
+					const today = new Date();
+					today.setFullYear(2025);
+					const targetDay = bookDate.getDate();
+					const nextMonth = bookDate.getMonth() !== today.getMonth();
+
+					console.log('Clicking date input...');
+					await page.locator('input').click();
+					
+					await page.waitForSelector('.react-datepicker', { timeout: 5000 });
+					await page.waitForTimeout(1000);
+					
+					if (nextMonth) {
+						console.log('Going to next month...');
+						await page.getByRole('button', { name: 'right' }).click();
+						await page.waitForTimeout(500);
+					}
+					
+					console.log(`Selecting day ${targetDay}...`);
+					const daySelector = `.react-datepicker__day--0${targetDay < 10 ? '0' : ''}${targetDay}:not(.react-datepicker__day--outside-month)`;
+					await page.locator(daySelector).first().click();
+					await page.waitForTimeout(1500);
+					
+					console.log('5. Checking time availability...');
+					await page.waitForSelector('text=/(\\d:)|(No free)/', { timeout: 8000 });
+					const times = await page.getByText('Tennis').first().evaluate((el: HTMLElement) => (el.parentElement as HTMLElement).innerText);
+					
+					let normalizedTime = time;
+					if (time.toLowerCase().includes('pm') || time.toLowerCase().includes('am')) {
+						if (!time.includes(':')) {
+							normalizedTime = time.replace(/(\d+)(pm|am)/i, '$1:00 $2').toUpperCase();
+						}
+					}
+					
+					console.log(`Looking for time: ${normalizedTime} in available times: ${times.replace(/\n/g, ', ')}`);
+					
+					if (!times.includes(normalizedTime)) {
+						throw new Error(`${normalizedTime} not available. Available: ${times.replace(/\n/g, ', ')}`);
+					}
+					
+					console.log('6. Booking time...');
+					await page.getByText(normalizedTime).click();
+					
+					console.log('7. Setting duration...');
+					await page.locator(`xpath=//label[text()='Duration']/following-sibling::button`).click();
+					await page.waitForSelector('text=2 hours', { timeout: 5000 });
+					await page.locator('div[role="option"]:not([aria-disabled="true"])').first().click();
+					
+					console.log('8. Selecting participant...');
+					await page.getByText('Select participant').click();
+					await page.getByText('Account Owner').click();
+					
+					console.log('9. Requesting SMS...');
+					await page.locator('button.max-w-max').click();
+					await page.getByText('Send Code').click();
+					
+					await page.waitForTimeout(2000);
+					
+					await page.waitForSelector('input[id="totp"]', { timeout: 8000 });
+					console.log('✅ SMS verification step reached!');
+					
+					return {
+						content: [{
+							type: "text",
+							text: `📱 SMS CODE REQUESTED! 
+
+🔐 Authenticated as: ${user.email}
 Court: ${court}
 Time: ${normalizedTime}
 Date: ${date}
@@ -416,61 +508,68 @@ When you receive the SMS code, run:
 enter_sms_code_and_complete({"code": "YOUR_SMS_CODE"})
 
 🔥 Browser is waiting at verification step!`
-				}]
-			};
-			
-		} catch (error) {
-			if (page) await page.close();
-			return {
-				content: [{
-					type: "text",
-					text: `❌ Booking failed: ${error instanceof Error ? error.message : 'Unknown error'}`
-				}]
-			};
-		}
-		// DON'T close page - keep it open for SMS entry
-	}
-);
-
-// SIMPLE SMS CODE ENTRY - FOR ALREADY LOADED VERIFICATION PAGE
-// User books manually until SMS step, then uses this tool to complete
-
-this.server.tool(
-	"enter_sms_code_and_complete",
-	{
-		code: z.string().describe("SMS verification code you received on your phone")
-	},
-	async ({ code }) => {
-		console.log(`Entering SMS code: ${code}`);
-		
-		if (!this.browser) {
-			await this.init();
-		}
-		
-		try {
-			// Find the page with SMS verification input
-			const pages = await this.browser.contexts()[0]?.pages() || [];
-			let verificationPage = null;
-			
-			for (const page of pages) {
-				try {
-					// Look for the exact input element you specified
-					const hasTotp = await page.locator('input[id="totp"]').isVisible({ timeout: 1000 }).catch(() => false);
-					if (hasTotp) {
-						verificationPage = page;
-						console.log('Found verification page with SMS input');
-						break;
-					}
-				} catch (e) {
-					continue;
+						}]
+					};
+					
+				} catch (error) {
+					if (page) await page.close();
+					return {
+						content: [{
+							type: "text",
+							text: `❌ Booking failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+						}]
+					};
 				}
 			}
-			
-			if (!verificationPage) {
-				return {
-					content: [{
-						type: "text",
-						text: `❌ No SMS verification page found.
+		);
+
+		// ===== TOOL 3: ENTER SMS CODE AND COMPLETE BOOKING (PROTECTED - AUTH REQUIRED) =====
+		this.server.tool(
+			"enter_sms_code_and_complete",
+			{
+				code: z.string().describe("SMS verification code you received on your phone")
+			},
+			async ({ code }, extra) => {
+				// 🔒 AUTH CHECK
+				const user = await this.authenticateUser(extra);
+				if (!user) {
+					const currentEnv = getEnv() as Env;
+					return {
+						content: [{
+							type: "text",
+							text: this.getAuthRequiredMessage(currentEnv)
+						}]
+					};
+				}
+
+				console.log(`✅ Authenticated user ${user.email} is completing booking with SMS code: ${code}`);
+				
+				if (!this.browser) {
+					await this.init();
+				}
+				
+				try {
+					const pages = await this.browser.contexts()[0]?.pages() || [];
+					let verificationPage = null;
+					
+					for (const page of pages) {
+						try {
+							const hasTotp = await page.locator('input[id="totp"]').isVisible({ timeout: 1000 }).catch(() => false);
+							if (hasTotp) {
+								verificationPage = page;
+								console.log('Found verification page with SMS input');
+								break;
+							}
+						} catch (e) {
+							continue;
+						}
+					}
+					
+					if (!verificationPage) {
+						return {
+							content: [{
+								type: "text",
+								text: `❌ No SMS verification page found.
 
 Please:
 1. Complete your booking manually until you reach SMS verification step
@@ -478,83 +577,79 @@ Please:
 3. When you get the SMS, run this tool again
 
 The verification page should have an input field for the code.`
-					}]
-				};
-			}
-			
-			console.log('Found SMS verification input, entering code...');
-			
-			// EXACT GitHub pattern - use page.type instead of fill
-			console.log('entering code');
-			await verificationPage.type('input[id="totp"]', code);
-			
-			// EXACT GitHub timeout pattern
-			verificationPage.setDefaultTimeout(180000); // 3 minute timeout like GitHub
-			console.log('confirming with 3 min timeout');
-			
-			// EXACT GitHub confirm click pattern
-			try {
-				await verificationPage.getByText('Confirm').last().click();
-			} catch (e) {
-				// keep trying - exact GitHub pattern
-				console.log("couldn't click confirm somehow");
-				throw new Error(e as string);
-			}
-			
-			// EXACT GitHub success detection pattern
-			try {
-				await verificationPage.waitForSelector("text=You're all set!");
-				console.log('success!, terminating');
-				
-				return {
-					content: [{
-						type: "text",
-						text: `🎾 BOOKING COMPLETED!
-
-✅ SMS code ${code} accepted
-✅ "You're all set!" confirmation received
-✅ Your tennis court is booked!`
-					}]
-				};
-				
-			} catch (e) {
-				console.error(e);
-				console.log('script was too late to book :(, terminating');
-				
-				// Check for specific error like GitHub code
-				try {
-					const pageText = await verificationPage.textContent('body', { timeout: 3000 }).catch(() => '');
-					if (pageText.includes('Court already reserved at this time')) {
-						return {
-							content: [{
-								type: "text",
-								text: `❌ Court already reserved at this time`
 							}]
 						};
 					}
-				} catch (ee) {
-					// Ignore
+					
+					console.log('Found SMS verification input, entering code...');
+					
+					this.log('entering code', 'system');
+					await verificationPage.type('input[id="totp"]', code);
+					
+					verificationPage.setDefaultTimeout(180000);
+					this.log('confirming with 3 min timeout', 'system');
+					
+					try {
+						await verificationPage.getByText('Confirm').last().click();
+					} catch (e) {
+						this.log("couldn't click confirm somehow", 'system');
+						throw new Error(e as string);
+					}
+					
+					try {
+						await verificationPage.waitForSelector("text=You're all set!");
+						this.log('success!, terminating', 'system');
+						
+						return {
+							content: [{
+								type: "text",
+								text: `🎾 BOOKING COMPLETED!
+
+🔐 Completed by: ${user.email}
+✅ SMS code ${code} accepted
+✅ "You're all set!" confirmation received
+✅ Your tennis court is booked!`
+							}]
+						};
+						
+					} catch (e) {
+						console.error(e);
+						this.log('script was too late to book :(, terminating', 'system');
+						
+						try {
+							const pageText = await verificationPage.textContent('body', { timeout: 3000 }).catch(() => '');
+							if (pageText.includes('Court already reserved at this time')) {
+								return {
+									content: [{
+										type: "text",
+										text: `❌ Court already reserved at this time`
+									}]
+								};
+							}
+						} catch (ee) {
+							// Ignore text extraction errors
+						}
+						
+						return {
+							content: [{
+								type: "text",
+								text: `❌ Booking timeout - check SF Rec website manually to verify booking status`
+							}]
+						};
+					}
+					
+				} catch (error) {
+					return {
+						content: [{
+							type: "text",
+							text: `❌ Error: ${error instanceof Error ? error.message : 'Unknown error'}`
+						}]
+					};
 				}
-				
-				return {
-					content: [{
-						type: "text",
-						text: `❌ Booking timeout - check SF Rec website manually to verify booking status`
-					}]
-				};
 			}
-			
-		} catch (error) {
-			return {
-				content: [{
-					type: "text",
-					text: `❌ Error: ${error instanceof Error ? error.message : 'Unknown error'}`
-				}]
-			};
-		}
-	}
-);
-		// Browser diagnostic tool
+		);
+
+		// ===== TOOL 4: BROWSER DIAGNOSTIC (PUBLIC) =====
 		this.server.tool(
 			"test_browser",
 			{},
@@ -601,13 +696,25 @@ The verification page should have an input field for the code.`
 			}
 		);
 
-		// Get booking history
+		// ===== TOOL 5: BOOKING HISTORY (PROTECTED - AUTH REQUIRED) =====
 		this.server.tool(
 			"get_booking_history",
 			{
 				days: z.number().optional().describe("Number of days to look back (default 30)")
 			},
-			async ({ days = 30 }) => {
+			async ({ days = 30 }, extra) => {
+				// 🔒 AUTH CHECK
+				const user = await this.authenticateUser(extra);
+				if (!user) {
+					const currentEnv = getEnv() as Env;
+					return {
+						content: [{
+							type: "text",
+							text: this.getAuthRequiredMessage(currentEnv)
+						}]
+					};
+				}
+
 				try {
 					const bookings = [];
 					const today = new Date();
@@ -629,11 +736,13 @@ The verification page should have an input field for the code.`
 					return {
 						content: [{
 							type: "text",
-							text: JSON.stringify({
+							text: `📋 Booking History for ${user.email}
+
+${JSON.stringify({
 								bookingsFound: bookings.length,
 								bookings: bookings,
 								daysSearched: days
-							}, null, 2)
+							}, null, 2)}`
 						}]
 					};
 				} catch (error) {
@@ -646,18 +755,272 @@ The verification page should have an input field for the code.`
 				}
 			}
 		);
+
+		// ===== TOOL 6: GET AUTHENTICATION URL (PUBLIC) =====
+		this.server.tool(
+			"get_auth_url",
+			{},
+			async () => {
+				const currentEnv = getEnv() as Env;
+				return {
+					content: [{
+						type: "text",
+						text: `🔗 AUTHENTICATION URL
+
+Visit this link to authenticate: ${this.AUTH_URL}
+
+This will:
+1. Redirect you to Google OAuth
+2. Verify you're an authorized user
+3. Register your session with the MCP server
+4. Allow you to use protected booking tools
+
+Authorized users: ${currentEnv.AUTHORIZED_USER_EMAILS || 'none configured'}
+
+After authentication, return here and try your booking command again.`
+					}]
+				};
+			}
+		);
+
+		// ===== TOOL 7: AUTHENTICATION STATUS (PUBLIC) =====
+		this.server.tool(
+			"auth_status",
+			{},
+			async (params, extra) => {
+				try {
+					const user = await this.authenticateUser(extra);
+					if (user) {
+						return {
+							content: [{
+								type: "text",
+								text: `✅ AUTHENTICATED
+
+User: ${user.email}
+ID: ${user.id}
+Email Verified: ${user.verified}
+
+You can now use:
+- book_and_request_sms (book courts)
+- enter_sms_code_and_complete (complete bookings)
+- get_booking_history (view your bookings)
+
+Anyone can still use:
+- check_tennis_courts (check availability)
+- test_browser (diagnostic tool)
+- get_auth_url (get authentication link)`
+							}]
+						};
+					} else {
+						const currentEnv = getEnv() as Env;
+						return {
+							content: [{
+								type: "text",
+								text: `🔐 NOT AUTHENTICATED
+
+🔗 **AUTHENTICATE NOW:**
+Visit: ${this.AUTH_URL}
+
+Available without authentication:
+- check_tennis_courts (check court availability)
+- test_browser (diagnostic tool)
+- get_auth_url (get authentication link)
+
+Requires authentication:
+- book_and_request_sms
+- enter_sms_code_and_complete  
+- get_booking_history
+
+Authorized users: ${currentEnv.AUTHORIZED_USER_EMAILS || 'none configured'}`
+							}]
+						};
+					}
+				} catch (error) {
+					return {
+						content: [{
+							type: "text",
+							text: `❌ Auth status check failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+						}]
+					};
+				}
+			}
+		);
 	}
 }
 
+// ===== CLOUDFLARE WORKER EXPORT =====
 export default {
-	fetch(request: Request, env: Env, ctx: ExecutionContext) {
+	async fetch(request: Request, env: Env, ctx: ExecutionContext) {
 		const url = new URL(request.url);
 
+		// Handle CORS preflight
+		if (request.method === 'OPTIONS') {
+			return new Response(null, {
+				headers: {
+					'Access-Control-Allow-Origin': '*',
+					'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+					'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+					'Access-Control-Max-Age': '86400',
+				},
+			});
+		}
+
+		// Authentication endpoint - handle OAuth callback from React app
+		if (url.pathname === '/authenticate') {
+			const token = url.searchParams.get('token');
+			
+			// Add CORS headers to all responses
+			const corsHeaders = {
+				'Access-Control-Allow-Origin': '*',
+				'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+				'Access-Control-Allow-Headers': 'Content-Type',
+			};
+			
+			if (!token) {
+				// This endpoint should only be called by the React app with a token
+				return new Response('This endpoint requires a token from the React authentication app', { 
+					status: 400,
+					headers: corsHeaders
+				});
+			}
+			
+			// Verify token with Stytch Consumer OAuth endpoint
+			try {
+				console.log('Authenticating token:', token.substring(0, 20) + '...');
+				
+				const response = await fetch(`https://api.stytch.com/v1/oauth/authenticate`, {
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/json',
+						'Authorization': `Basic ${btoa(`${env.STYTCH_PROJECT_ID}:${env.STYTCH_SECRET}`)}`
+					},
+					body: JSON.stringify({
+						token: token,
+						session_duration_minutes: 60 // 1 hour
+					})
+				});
+
+				if (!response.ok) {
+					const errorData = await response.text();
+					console.error('Stytch authentication failed:', errorData);
+					return new Response('Authentication failed', { 
+						status: 401,
+						headers: corsHeaders
+					});
+				}
+
+				const data = await response.json() as any;
+				console.log('Stytch response received, user:', data.user?.emails?.[0]?.email);
+				
+				// Check if user is authorized (Consumer structure)
+				if (data.user && data.user.emails) {
+					const userEmail = data.user.emails[0]?.email;
+					const authorizedEmails = env.AUTHORIZED_USER_EMAILS
+						.split(',')
+						.map(email => email.trim().toLowerCase());
+					
+					if (!authorizedEmails.includes(userEmail.toLowerCase())) {
+						return new Response(`Unauthorized user: ${userEmail}`, { 
+							status: 403,
+							headers: corsHeaders
+						});
+					}
+					
+					// Store session for MCP access
+					console.log('Storing session for user:', userEmail);
+					await storeMCPSession(env, data.user.user_id, userEmail);
+					
+					// Return success to React app
+					return new Response('Authentication successful', { 
+						status: 200,
+						headers: {
+							...corsHeaders,
+							'Content-Type': 'text/plain'
+						}
+					});
+				}
+				
+				return new Response('Invalid response from Stytch', { 
+					status: 500,
+					headers: corsHeaders
+				});
+			} catch (error) {
+				console.error('OAuth authentication error:', error);
+				return new Response(`Authentication error: ${error}`, { 
+					status: 500,
+					headers: corsHeaders
+				});
+			}
+		}
+
+		// Debug endpoint to check stored sessions
+		if (url.pathname === '/debug-sessions') {
+			try {
+				const keys = await env.KV.list({ prefix: 'mcp_session:' });
+				const sessions = [];
+				
+				for (const key of keys.keys) {
+					const session = await env.KV.get(key.name);
+					if (session) {
+						const data = JSON.parse(session);
+						sessions.push({
+							key: key.name,
+							email: data.email,
+							timestamp: new Date(data.timestamp).toISOString()
+						});
+					}
+				}
+				
+				return new Response(JSON.stringify({
+					totalSessions: sessions.length,
+					sessions: sessions
+				}, null, 2), {
+					headers: { 'Content-Type': 'application/json' }
+				});
+			} catch (error) {
+				return new Response(`Error: ${error}`, { status: 500 });
+			}
+		}
+
+		// Root endpoint with info
+		if (url.pathname === '/') {
+			return new Response(`🎾 SF Tennis Court Booking MCP Server
+
+This server uses Stytch Consumer OAuth for authentication.
+
+🔓 Public endpoints:
+- check_tennis_courts (check court availability)
+- test_browser (diagnostic tool)
+- auth_status (check authentication status)
+- get_auth_url (get authentication URL)
+
+🔒 Protected endpoints (authentication required):
+- book_and_request_sms (book courts)
+- enter_sms_code_and_complete (complete bookings)  
+- get_booking_history (view booking history)
+
+🔐 Authentication:
+- Authentication URL: https://mcp-tennis-auth.pages.dev/login
+- Authorized users: ${env.AUTHORIZED_USER_EMAILS}
+- Users must authenticate via React frontend app
+
+🔗 MCP endpoints:
+- SSE: /sse
+- MCP: /mcp
+
+To authenticate: Visit https://mcp-tennis-auth.pages.dev/login`, {
+				status: 200,
+				headers: { 'Content-Type': 'text/plain' },
+			});
+		}
+
+		// Route SSE (Server-Sent Events) requests for real-time communication
 		if (url.pathname === "/sse" || url.pathname === "/sse/message") {
 			// @ts-ignore
 			return MyMCP.serveSSE("/sse").fetch(request, env, ctx);
 		}
 
+		// Route MCP protocol requests
 		if (url.pathname === "/mcp") {
 			// @ts-ignore
 			return MyMCP.serve("/mcp").fetch(request, env, ctx);

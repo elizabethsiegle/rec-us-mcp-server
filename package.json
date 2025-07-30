@@ -2,27 +2,37 @@
 	"name": "rec-us-mcp-server",
 	"version": "0.0.0",
 	"private": true,
+	"type": "module",
 	"scripts": {
 		"deploy": "wrangler deploy",
-		"dev": "wrangler dev",
+		"dev": "wrangler dev --local",
+		"build": "tsc",
+		"test-auth": "curl https://rec-us-mcp-server.lizziepika.workers.dev/.well-known/oauth-authorization-server",
 		"format": "biome format --write",
 		"lint:fix": "biome lint --fix",
 		"start": "wrangler dev",
 		"cf-typegen": "wrangler types",
-		"type-check": "tsc --noEmit"
+		"type-check": "tsc --noEmit",
+		"update-policy": "node update-policy.js"
 	},
 	"dependencies": {
 		"@cloudflare/puppeteer": "^1.0.3",
 		"@modelcontextprotocol/sdk": "1.13.1",
+		"@stytch/vanilla-js": "^5.29.0",
 		"agents": "^0.0.100",
+		"commander": "^14.0.0",
 		"google": "^2.1.0",
 		"googleapis": "^154.0.0",
+		"jose": "^6.0.12",
+		"jsonwebtoken": "^9.0.2",
 		"readline": "^1.3.0",
+		"undici": "^7.12.0",
 		"zod": "^3.25.67"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.0.6",
 		"@cloudflare/playwright": "^0.0.10",
+		"@types/jsonwebtoken": "^9.0.10",
 		"typescript": "^5.8.3",
 		"wrangler": "^4.22.0"
 	}
