@@ -1,0 +1,34 @@
+## Browser Power: Building MCP Tools That Do Real Work @ MCP Builders Summit Hosted by Featureform and SVB
+
+- [ ] 👋🌊 
+- [ ] Tennis🎾 Booking MCP project
+    - tool !respond with JSON. Clicks
+    - headless browser
+- [ ] Demo
+- [ ] MCP servers on Cloudflare
+- [ ] Bindings!
+- [ ] Tools🛠️⚒️
+    - check_tennis_courts
+        - data normalization
+    - book_and_request_sms
+    - enter_sms_code_and_complete
+- [ ] MCP tooling tips
+    - Tool > agent
+        - tools do the work. Prioritize tool quality > orchestration complexity
+    - Use schemas
+        - Zod schemas are valuable--says what's required, optional, + broken
+    - Avoid tool soup🍲
+        - 1 tool per responsibility. 
+        - Don't mix read + write || logic + UI
+    - Don't blindly use tools
+        - see [tool poisoning](https://x.com/lbeurerkellner/status/1907075048118059101?s=46)
+- [ ] In this project
+    - Debug in prod: real links, real sites. 
+    - Give tools logs
+- [ ] What's next
+    - auth
+    - schedule
+- [ ] Resources
+    - [Cloudflare Playwright MCP](https://github.com/cloudflare/playwright-mcp)
+    - [Browser Rendering docs]()
+
