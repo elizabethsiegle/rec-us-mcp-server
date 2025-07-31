@@ -3,32 +3,44 @@
 - [ ] 👋🌊 
 - [ ] Tennis🎾 Booking MCP project
     - tool !respond with JSON. Clicks
-    - headless browser
 - [ ] Demo
 - [ ] MCP servers on Cloudflare
 - [ ] Bindings!
 - [ ] Tools🛠️⚒️
     - check_tennis_courts
-        - data normalization
     - book_and_request_sms
     - enter_sms_code_and_complete
-- [ ] MCP tooling tips
-    - Tool > agent
-        - tools do the work. Prioritize tool quality > orchestration complexity
+- [ ] MCP 🛠️ tips && takes
+    - 🔨 > 🕵️‍♀️
+        - 🔨 quality > orchestration complexity
     - Use schemas
-        - Zod schemas are valuable--says what's required, optional, + broken
-    - Avoid tool soup🍲
-        - 1 tool per responsibility. 
-        - Don't mix read + write || logic + UI
-    - Don't blindly use tools
-        - see [tool poisoning](https://x.com/lbeurerkellner/status/1907075048118059101?s=46)
-- [ ] In this project
-    - Debug in prod: real links, real sites. 
-    - Give tools logs
-- [ ] What's next
+        - Zod schemas = valuable (needed, ?, broken)
+        - !just validation, but clarity
+    - Avoid tool soup🍲 (!overload)
+        - 1 tool per responsibility
+        - !mix read + write || logic + UI
+            - safer, testable, LLM can flexibly chain
+    - !blindly use tools
+        - 👀 [tool poisoning](https://x.com/lbeurerkellner/status/1907075048118059101?s=46)
+    - MCP ⚒️ != API Wrappers
+    - Design Tools⚒️ like you design endpoints
+        - validate inputs, predict outputs
+        - doc edge cases (ie "this tool might fail if site is down")
+    - Descriptions should be boring
+- [ ] In this project...
+    - Debug in prod
+    - Give tools⚒️ logs🪵. 
+    - Keep DOM interaction as minimal as possible
+    - Watch for layout shifts, button loads
+    - headless browser != headless logic
+        - !just controlling browser, automating judgment
+        - retries, timeouts, fallbacks
+- [ ] What's Next
     - auth
-    - schedule
+    - schedule (cron)
+    - browser MCP tools = LLMs go from text prediction -> task completion
 - [ ] Resources
     - [Cloudflare Playwright MCP](https://github.com/cloudflare/playwright-mcp)
-    - [Browser Rendering docs]()
+    - [Browser Rendering docs](https://developers.cloudflare.com/browser-rendering/)
+    - [Cloudflare MCP click to deploy](https://developers.cloudflare.com/agents/guides/remote-mcp-server/)
 
