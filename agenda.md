@@ -1,7 +1,7 @@
 ## Browser Power: Building MCP Tools That Do Real Work @ MCP Builders Summit Hosted by Featureform and SVB
 
 - [ ] 👋🌊 
-- [ ] Tennis🎾 Booking MCP project
+- [ ] Tennis🎾 Booking MCP Server
     - tool !respond with JSON. Clicks
 - [ ] Demo
 - [ ] MCP servers on Cloudflare
@@ -14,7 +14,7 @@
     - 🔨 > 🕵️‍♀️
         - 🔨 quality > orchestration complexity
     - Use schemas
-        - Zod schemas = valuable (needed, ?, broken)
+        - Zod schemas = valuable
         - !just validation, but clarity
     - Avoid tool soup🍲 (!overload)
         - 1 tool per responsibility
@@ -37,8 +37,9 @@
         - retries, timeouts, fallbacks
 - [ ] What's Next
     - auth
-    - schedule (cron)
+    - schedule ie [cron triggers](https://developers.cloudflare.com/workers/configuration/cron-triggers/)
     - browser MCP tools = LLMs go from text prediction -> task completion
+    - email lizzie@cloudflare.com, 🐦@lizziepika
 - [ ] Resources
     - [Cloudflare Playwright MCP](https://github.com/cloudflare/playwright-mcp)
     - [Browser Rendering docs](https://developers.cloudflare.com/browser-rendering/)
