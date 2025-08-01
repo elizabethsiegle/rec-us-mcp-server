@@ -11,22 +11,22 @@ interface Env {
 	KV: KVNamespace;           
 	REC_EMAIL: string;                
 	REC_PASSWORD: string;             
-	AUTHORIZED_USER_EMAILS: string;
+	AUTHORIZED_USER_EMAILS: string; // google emails that can book a court
 }
 
-// ===== AUTHENTICATION UTILITIES =====
+// auth utilities
 interface AuthenticatedUser {
 	id: string;
 	email: string;
 	verified: boolean;
 }
 
-// Helper function to access environment variables with proper typing
+// helper func to get env variables w/ proper types
 function getEnv<Env>() {
 	return env as Env;
 }
 
-// Helper function to store MCP session
+// helper func to store MCP session
 async function storeMCPSession(env: Env, userId: string, email: string): Promise<void> {
 	const sessionKey = `mcp_session:${userId}`;
 	const sessionData = JSON.stringify({
@@ -44,21 +44,74 @@ async function storeMCPSession(env: Env, userId: string, email: string): Promise
 export class MyMCP extends McpAgent {
 	server: McpServer;
 
-	// AUTHENTICATION URL
+	// pages auth url
 	private readonly AUTH_URL = "https://mcp-tennis-auth.pages.dev/login";
 
-	// BROWSER MANAGEMENT PROPERTIES
+	// browser management props
 	private browser: any = null;                          
 	private lastBrowserInit: number = 0;                  
 	private readonly BROWSER_TIMEOUT = 5 * 60 * 1000;    
 	private initPromise: Promise<void> | null = null;     
 	private isInitializing = false;                       
 
-	// REGISTRATION GUARD
+	// registration guard
 	private toolsRegistered = false;
 
+	// helper func to store pending booking details
+	private async storePendingBooking(userId: string, court: string, time: string, date: string): Promise<void> {
+		try {
+			const pendingBookingData = {
+				court: court,
+				time: time,
+				date: date,
+				timestamp: Date.now()
+			};
+			
+			const pendingKey = `pending_booking:${userId}`;
+			await (env as any).KV.put(pendingKey, JSON.stringify(pendingBookingData), {
+				expirationTtl: 3600 // 1 hour in seconds
+			});
+			
+			console.log(`✅ Pending booking stored: ${pendingKey}`);
+		} catch (error) {
+			console.error('❌ Error storing pending booking:', error);
+		}
+	}
+
+	// helper func to get pending booking details
+	private async getPendingBooking(userId: string): Promise<{court: string, time: string, date: string} | null> {
+		try {
+			const pendingKey = `pending_booking:${userId}`;
+			const pendingData = await (env as any).KV.get(pendingKey);
+			
+			if (pendingData) {
+				const bookingData = JSON.parse(pendingData);
+				// Check if pending booking is < 1 hour old
+				if (Date.now() - bookingData.timestamp < 3600000) {
+					return bookingData;
+				}
+			}
+			
+			return null;
+		} catch (error) {
+			console.error('❌ Error getting pending booking:', error);
+			return null;
+		}
+	}
+
+	// helper func to clear pending booking
+	private async clearPendingBooking(userId: string): Promise<void> {
+		try {
+			const pendingKey = `pending_booking:${userId}`;
+			await (env as any).KV.delete(pendingKey);
+			console.log(`✅ Pending booking cleared: ${pendingKey}`);
+		} catch (error) {
+			console.error('❌ Error clearing pending booking:', error);
+		}
+	}
+
 	constructor(state: any) {
-		// Initialize MCP server with metadata
+		// init MCP server with metadata
 		const server = new McpServer({
 			name: "Tennis Court Booking (Consumer Auth)",
 			version: "5.0.0",
@@ -73,26 +126,24 @@ export class MyMCP extends McpAgent {
 		}
 	}
 
-	// ===== AUTHENTICATION ERROR MESSAGE HELPER =====
+	// auth error msg helper
 	private getAuthRequiredMessage(currentEnv: Env): string {
-		return `🔐 AUTHENTICATION REQUIRED
+		return `Auth required
 
-This booking operation requires authentication.
+		This booking operation requires authentication.
 
-🔗 **AUTHENTICATE NOW:**
-Visit: ${this.AUTH_URL}
+		**Authenticate now:**
+		Visit: ${this.AUTH_URL}
 
-Steps:
-1. Click or visit the authentication URL above
-2. Sign in with Google using an authorized email
-3. Return here and try the booking again
+		Steps:
+		1. Click or visit the auth URL above
+		2. Sign in with Google using an authorized email
+		3. Return here and try the booking again
 
-Authorized users: ${currentEnv.AUTHORIZED_USER_EMAILS || 'No authorized users configured'}
+		Authorized users: ${currentEnv.AUTHORIZED_USER_EMAILS || 'No authorized users configured'}
 
-The authentication page will handle the OAuth flow and register your session automatically.`;
+		The auth page will handle the OAuth flow and register your session automatically.`;
 	}
-
-	// ===== SIMPLIFIED AUTHENTICATION MIDDLEWARE =====
 	private async authenticateUser(extra?: any): Promise<AuthenticatedUser | null> {
 		try {
 			// For MCP clients, check if we have a stored session
@@ -113,13 +164,13 @@ The authentication page will handle the OAuth flow and register your session aut
 	private async getMCPSession(): Promise<AuthenticatedUser | null> {
 		const currentEnv = getEnv() as Env;
 		
-		// Look for any recent authenticated session
+		// Look for any recent auth session
 		const keys = await currentEnv.KV.list({ prefix: 'mcp_session:' });
 		for (const key of keys.keys) {
 			const session = await currentEnv.KV.get(key.name);
 			if (session) {
 				const sessionData = JSON.parse(session);
-				// Check if session is less than 1 hour old
+				// Check if session is < 1 hour old
 				if (Date.now() - sessionData.timestamp < 3600000) {
 					return sessionData;
 				}
@@ -129,7 +180,7 @@ The authentication page will handle the OAuth flow and register your session aut
 		return null;
 	}
 
-	// ===== BROWSER INITIALIZATION & MANAGEMENT =====
+	// browser init/management
 	async init() {
 		if (this.isInitializing) {
 			await this.initPromise;
@@ -184,7 +235,7 @@ The authentication page will handle the OAuth flow and register your session aut
 		}
 	}
 
-	// ===== UTILITY FUNCTIONS =====
+	// utility funcs
 	private log(str: string, email: string = 'system') {
 		const date = new Date();
 		console.log(`${email}:${date.getMonth() + 1}/${date.getDate()},${date.getHours()}:${date.getMinutes()}:${date.getSeconds()} - ${str}`);
@@ -218,17 +269,6 @@ The authentication page will handle the OAuth flow and register your session aut
 		return providedDate.toISOString().split('T')[0];
 	}
 
-	private async getBookingStatus(date: string): Promise<string | null> {
-		this.log('hello ' + await (env as any).KV?.get(`booking:${date}`));
-		try {
-			return await (env as any).KV?.get(`booking:${date}`);
-		} catch (error) {
-			console.error('Error getting booking status:', error);
-			return null;
-		}
-	}
-
-	// ===== KV STORAGE HELPER =====
 	private async saveBookingToKV(court: string, time: string, date: string, userEmail: string): Promise<void> {
 		try {
 			const bookingData = {
@@ -250,7 +290,7 @@ The authentication page will handle the OAuth flow and register your session aut
 		}
 	}
 
-	// ===== MCP TOOL DEFINITIONS =====
+	// MCP tools
 	private initializeTools() {
 		// Prevent double registration
 		if (this.toolsRegistered) {
@@ -260,7 +300,7 @@ The authentication page will handle the OAuth flow and register your session aut
 
 		console.log('Registering MCP tools...');
 		
-		// ===== TOOL 1: CHECK TENNIS COURT AVAILABILITY (PUBLIC - NO AUTH) =====
+		// Tool 1: Check tennis court availability no auth
 		this.server.tool(
 			"check_tennis_courts",
 			{
@@ -346,8 +386,7 @@ The authentication page will handle the OAuth flow and register your session aut
 		
 					await page.close(); // Clean up the page
 		
-					// ===== AI RESPONSE GENERATION =====
-					// Use Cloudflare AI to generate a natural language response
+					// Workers AI generates natural language resp
 					let responseText;
 					try {
 						const messages = [
@@ -405,7 +444,7 @@ The authentication page will handle the OAuth flow and register your session aut
 			}
 		);
 
-		// ===== TOOL 2: BOOK COURT AND REQUEST SMS (PROTECTED - AUTH REQUIRED) =====
+		// Tool 2: Book court and request SMS. Protected/auth required
 		this.server.tool(
 			"book_and_request_sms",
 			{
@@ -414,7 +453,7 @@ The authentication page will handle the OAuth flow and register your session aut
 				date: z.string().describe("Date in YYYY-MM-DD format")
 			},
 			async ({ court, time, date }, extra) => {
-				// 🔒 AUTH CHECK
+				// auth check!
 				const user = await this.authenticateUser(extra);
 				if (!user) {
 					const currentEnv = getEnv() as Env;
@@ -525,22 +564,25 @@ The authentication page will handle the OAuth flow and register your session aut
 					await page.waitForSelector('input[id="totp"]', { timeout: 8000 });
 					console.log('✅ SMS verification step reached!');
 					
+					// Store pending booking details for later retrieval
+					await this.storePendingBooking(user.id, court, normalizedTime, date);
+					
 					return {
 						content: [{
 							type: "text",
-							text: `📱 SMS CODE REQUESTED! 
+							text: `SMS code requested! 
 
-🔐 Authenticated as: ${user.email}
-Court: ${court}
-Time: ${normalizedTime}
-Date: ${date}
+							- Authenticated as: ${user.email}
+							- Court: ${court}
+							- Time: ${normalizedTime}
+							- Date: ${date}
 
-An SMS verification code has been sent to your phone.
+							An SMS verification code has been sent to your phone.
 
-When you receive the SMS code, run:
-enter_sms_code_and_complete({"code": "YOUR_SMS_CODE"})
+							When you receive the SMS code, run:
+							enter_sms_code_and_complete({"code": "YOUR_SMS_CODE"})
 
-🔥 Browser is waiting at verification step!`
+							🔥 Browser is waiting at verification step!`
 						}]
 					};
 					
@@ -562,7 +604,7 @@ enter_sms_code_and_complete({"code": "YOUR_SMS_CODE"})
 				code: z.string().describe("SMS verification code you received on your phone")
 			},
 			async ({ code }, extra) => {
-				// 🔒 AUTH CHECK
+				// auth check
 				const user = await this.authenticateUser(extra);
 				if (!user) {
 					const currentEnv = getEnv() as Env;
@@ -581,13 +623,13 @@ enter_sms_code_and_complete({"code": "YOUR_SMS_CODE"})
 				}
 				
 				try {
-					// Find the page with SMS verification input
+					// Find page w/ SMS verification input
 					const pages = await this.browser.contexts()[0]?.pages() || [];
 					let verificationPage = null;
 					
 					for (const page of pages) {
 						try {
-							// Look for the exact input element you specified
+							// Look for the exact input element specified
 							const hasTotp = await page.locator('input[id="totp"]').isVisible({ timeout: 1000 }).catch(() => false);
 							if (hasTotp) {
 								verificationPage = page;
@@ -605,49 +647,65 @@ enter_sms_code_and_complete({"code": "YOUR_SMS_CODE"})
 								type: "text",
 								text: `❌ No SMS verification page found.
 		
-		Please:
-		1. Complete your booking manually until you reach SMS verification step
-		2. Click "Send Code" button  
-		3. When you get the SMS, run this tool again
-		
-		The verification page should have an input field for the code.`
+								Please:
+								1. Complete your booking manually until you reach SMS verification step
+								2. Click "Send Code" button  
+								3. When you get the SMS, run this tool again
+								
+								The verification page should have an input field for the code.`
 							}]
 						};
 					}
 					
 					console.log('Found SMS verification input, entering code...');
 					
-					// EXACT GitHub pattern - use page.type instead of fill
+					// use page.type instead of fill
 					console.log('entering code');
 					await verificationPage.type('input[id="totp"]', code);
 					
-					// EXACT GitHub timeout pattern
+					// timeout pattern
 					verificationPage.setDefaultTimeout(180000); // 3 minute timeout like GitHub
 					console.log('confirming with 3 min timeout');
 					
-					// EXACT GitHub confirm click pattern
+					// confirm click pattern
 					try {
 						await verificationPage.getByText('Confirm').last().click();
 					} catch (e) {
-						// keep trying - exact GitHub pattern
+						// keep trying
 						console.log("couldn't click confirm somehow");
 						throw new Error(e as string);
 					}
 					
-					// EXACT GitHub success detection pattern
+					// success detection pattern
 					try {
 						await verificationPage.waitForSelector("text=You're all set!");
 						console.log('success!, terminating');
+						
+						// Retrieve pending booking details
+						const pendingBooking = await this.getPendingBooking(user.id);
+						if (!pendingBooking) {
+							return {
+								content: [{
+									type: "text",
+									text: `❌ No pending booking found for user ${user.email}. Cannot complete booking.`
+								}]
+							};
+						}
+
+						const { court, time, date } = pendingBooking;
+						await this.clearPendingBooking(user.id); // Clear pending booking after successful completion
+
+						await this.saveBookingToKV(court, time, date, user.email);
 						
 						return {
 							content: [{
 								type: "text",
 								text: `🎾 BOOKING COMPLETED!
 		
-		🔐 Completed by: ${user.email}
-		✅ SMS code ${code} accepted
-		✅ "You're all set!" confirmation received
-		✅ Your tennis court is booked!`
+								- Completed by: ${user.email}
+								- SMS code ${code} accepted
+								- "You're all set!" confirmation received
+								- Your tennis court is booked!`
 							}]
 						};
 						
@@ -689,7 +747,7 @@ enter_sms_code_and_complete({"code": "YOUR_SMS_CODE"})
 			}
 		);
 
-		// ===== TOOL 4: BROWSER DIAGNOSTIC (PUBLIC) =====
+		// Tool 4--public browser diagnostic
 		this.server.tool(
 			"test_browser",
 			{},
@@ -736,7 +794,7 @@ enter_sms_code_and_complete({"code": "YOUR_SMS_CODE"})
 			}
 		);
 
-		// ===== TOOL 5: BOOKING HISTORY (PROTECTED - AUTH REQUIRED) =====
+		// Tool 5:booking history. auth required
 		this.server.tool(
 			"get_booking_history",
 			{
@@ -791,14 +849,14 @@ enter_sms_code_and_complete({"code": "YOUR_SMS_CODE"})
 							type: "text",
 							text: `📋 Booking History for ${user.email}
 
-Found ${bookings.length} bookings in the last ${days} days:
+							Found ${bookings.length} bookings in the last ${days} days:
 
-${bookings.length > 0 ? 
-	bookings.map(b => `📅 ${b.date} - 🏟️ ${b.court} at ⏰ ${b.time} (${b.status})`).join('\n') : 
-	'No bookings found in this time period.'
-}
+							${bookings.length > 0 ? 
+								bookings.map(b => `📅 ${b.date} - 🏟️ ${b.court} at ⏰ ${b.time} (${b.status})`).join('\n') : 
+								'No bookings found in this time period.'
+							}
 
-${bookings.length > 0 ? `\n🔍 Detailed data:\n${JSON.stringify(bookings, null, 2)}` : ''}`
+							${bookings.length > 0 ? `\n🔍 Detailed data:\n${JSON.stringify(bookings, null, 2)}` : ''}`
 						}]
 					};
 				} catch (error) {
@@ -812,7 +870,7 @@ ${bookings.length > 0 ? `\n🔍 Detailed data:\n${JSON.stringify(bookings, null,
 			}
 		);
 
-		// ===== TOOL 6: GET AUTHENTICATION URL (PUBLIC) =====
+		// Tool 6: get auth url (public)
 		this.server.tool(
 			"get_auth_url",
 			{},
@@ -823,23 +881,23 @@ ${bookings.length > 0 ? `\n🔍 Detailed data:\n${JSON.stringify(bookings, null,
 						type: "text",
 						text: `🔗 AUTHENTICATION URL
 
-Visit this link to authenticate: ${this.AUTH_URL}
+						Visit this link to authenticate via Google OAuth: ${this.AUTH_URL}
 
-This will:
-1. Redirect you to Google OAuth
-2. Verify you're an authorized user
-3. Register your session with the MCP server
-4. Allow you to use protected booking tools
+						This will:
+						1. Redirect you to Google OAuth
+						2. Verify you're an authorized user
+						3. Register your session with the MCP server
+						4. Allow you to use protected booking tools
 
-Authorized users: ${currentEnv.AUTHORIZED_USER_EMAILS || 'none configured'}
+						Authorized users: ${currentEnv.AUTHORIZED_USER_EMAILS || 'none configured'}
 
-After authentication, return here and try your booking command again.`
+						After authentication, return here and try booking again.`
 					}]
 				};
 			}
 		);
 
-		// ===== TOOL 7: AUTHENTICATION STATUS (PUBLIC) =====
+		// public tool: auth status
 		this.server.tool(
 			"auth_status",
 			{},
@@ -852,19 +910,19 @@ After authentication, return here and try your booking command again.`
 								type: "text",
 								text: `✅ AUTHENTICATED
 
-User: ${user.email}
-ID: ${user.id}
-Email Verified: ${user.verified}
+								User: ${user.email}
+								ID: ${user.id}
+								Email Verified: ${user.verified}
 
-You can now use:
-- book_and_request_sms (book courts)
-- enter_sms_code_and_complete (complete bookings)
-- get_booking_history (view your bookings)
+								You can now use:
+								- book_and_request_sms (book courts)
+								- enter_sms_code_and_complete (complete bookings)
+								- get_booking_history (view your bookings)
 
-Anyone can still use:
-- check_tennis_courts (check availability)
-- test_browser (diagnostic tool)
-- get_auth_url (get authentication link)`
+								Anyone can still use:
+								- check_tennis_courts (check court availability)
+								- test_browser (diagnostic tool)
+								- get_auth_url (get auth link)`
 							}]
 						};
 					} else {
@@ -872,22 +930,22 @@ Anyone can still use:
 						return {
 							content: [{
 								type: "text",
-								text: `🔐 NOT AUTHENTICATED
+								text: `🔐 !AUTHENTICATED
 
-🔗 **AUTHENTICATE NOW:**
-Visit: ${this.AUTH_URL}
+								🔗 **AUTHENTICATE NOW:**
+								Visit: ${this.AUTH_URL}
 
-Available without authentication:
-- check_tennis_courts (check court availability)
-- test_browser (diagnostic tool)
-- get_auth_url (get authentication link)
+								Available without auth:
+								- check_tennis_courts (check court availability)
+								- test_browser (diagnostic tool)
+								- get_auth_url (get auth link)
 
-Requires authentication:
-- book_and_request_sms
-- enter_sms_code_and_complete  
-- get_booking_history
+								Requires auth:
+								- book_and_request_sms
+								- enter_sms_code_and_complete  
+								- get_booking_history
 
-Authorized users: ${currentEnv.AUTHORIZED_USER_EMAILS || 'none configured'}`
+								Authorized users: ${currentEnv.AUTHORIZED_USER_EMAILS || 'none configured'}`
 							}]
 						};
 					}
@@ -906,7 +964,7 @@ Authorized users: ${currentEnv.AUTHORIZED_USER_EMAILS || 'none configured'}`
 	}
 }
 
-// ===== CLOUDFLARE WORKER EXPORT =====
+// Worker
 export default {
 	async fetch(request: Request, env: Env, ctx: ExecutionContext) {
 		const url = new URL(request.url);
@@ -923,7 +981,7 @@ export default {
 			});
 		}
 
-		// ===== SIMPLIFIED AUTHENTICATION ENDPOINT =====
+		// auth endpoint
 		if (url.pathname === '/authenticate') {
 			// Add CORS headers to all responses
 			const corsHeaders = {
@@ -1013,29 +1071,29 @@ export default {
 		if (url.pathname === '/') {
 			return new Response(`🎾 SF Tennis Court Booking MCP Server
 
-This server uses simplified frontend authentication.
+			This server uses simplified frontend authentication.
 
-🔓 Public endpoints:
-- check_tennis_courts (check court availability)
-- test_browser (diagnostic tool)
-- auth_status (check authentication status)
-- get_auth_url (get authentication URL)
+			Public endpoints:
+			- check_tennis_courts (check court availability)
+			- test_browser (diagnostic tool)
+			- auth_status (check authentication status)
+			- get_auth_url (get authentication URL)
 
-🔒 Protected endpoints (authentication required):
-- book_and_request_sms (book courts)
-- enter_sms_code_and_complete (complete bookings)  
-- get_booking_history (view booking history)
+			Protected endpoints (auth required):
+			- book_and_request_sms (book courts)
+			- enter_sms_code_and_complete (complete bookings)  
+			- get_booking_history (view booking history)
 
-🔐 Authentication:
-- Authentication URL: https://mcp-tennis-auth.pages.dev/login
-- Authorized users: ${env.AUTHORIZED_USER_EMAILS}
-- Users authenticate via React frontend app
+			Auth:
+			- Auth URL: https://mcp-tennis-auth.pages.dev/login
+			- Authorized users: ${env.AUTHORIZED_USER_EMAILS}
+			- Users authenticate via React frontend app
 
-🔗 MCP endpoints:
-- SSE: /sse
-- MCP: /mcp
+			🔗 MCP endpoints:
+			- SSE: /sse
+			- MCP: /mcp
 
-To authenticate: Visit https://mcp-tennis-auth.pages.dev/login`, {
+			To authenticate: Visit https://mcp-tennis-auth.pages.dev/login`, {
 				status: 200,
 				headers: { 'Content-Type': 'text/plain' },
 			});
