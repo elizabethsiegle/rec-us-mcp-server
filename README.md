@@ -2,11 +2,13 @@
 <img width="1079" height="960" alt="image" src="https://github.com/user-attachments/assets/bbec40bb-2ac0-475b-ba31-03a6529fba03" />
 
 
-Automate tennis court bookings on San Francisco Recreation websites using a Cloudflare MCP (Model Context Protocol) server with browser automation. Never miss your favorite court time again!
+Automate tennis court bookings on San Francisco Recreation websites using a Cloudflare MCP (Model Context Protocol) server with browser automation. Never miss your favorite court and court time again! 
+
+It uses [Stytch](https://stytch.com) to authenticate the server so only certain emails (like mine) can book a court (in my name.)
 
 ## What This Does
 
-This MCP server provides **3 tennis booking tools**:
+This MCP server has **3 tennis booking tools**:
 
 - **Check Court Availability** - See available time slots for any court/date
 - **Book Court & Request SMS** - Automate booking flow up to SMS verification  
