@@ -1,4 +1,4 @@
-## Browser Power: Building MCP Tools That Do Real Work @ MCP Builders Summit Hosted by Featureform and SVB
+## Browser Power: Building MCP Tools That Do Work @ MCP Builders Summit by Featureform && SVB
 
 - [ ] 👋🌊 
 - [ ] Tennis🎾 Booking MCP Server

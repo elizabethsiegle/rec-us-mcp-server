@@ -1,0 +1,6 @@
+{
+  "internal": true,
+  "main": "../../dist/adminPortal/index.js",
+  "module": "../../dist/adminPortal/index.esm.js",
+  "types": "../../dist/adminPortal/index.d.ts"
+}
