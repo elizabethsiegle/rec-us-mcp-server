@@ -6,6 +6,9 @@ Automate tennis court bookings on San Francisco Recreation websites using a Clou
 
 It uses [Stytch](https://stytch.com) to authenticate the server so only certain emails (like mine) can book a court (in my name.)
 
+## Demo Video
+📹 [Watch the demo and a brief project explanation on YouTube](https://youtu.be/6s5f_25_qWI)
+
 ## What This Does
 
 This MCP server has **3 tennis booking tools**:
