@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/elizabethsiegle-rec-us-mcp-server-badge.png)](https://mseep.ai/app/elizabethsiegle-rec-us-mcp-server)
+
 # SF Tennis Court Booking via Cloudflare MCP Server
 <img width="1079" height="960" alt="image" src="https://github.com/user-attachments/assets/bbec40bb-2ac0-475b-ba31-03a6529fba03" />
 
